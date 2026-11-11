@@ -4,13 +4,13 @@
   "name": "szsa"
  },
  "metadata": {
-  "description": "Claude Code skills and commands, shared"
+  "description": "dev-comments for Claude Code, shared"
  },
  "plugins": [
   {
-   "name": "web-workflow",
-   "source": "./plugins/web-workflow",
-   "description": "/comments, dev-comments"
+   "name": "dev-comments",
+   "source": "./plugins/dev-comments",
+   "description": "Click on your running website, pin a comment to an element, and Claude reads it, fixes it, replies and resolves. /comments opens the Comment Desk."
   }
  ]
 }

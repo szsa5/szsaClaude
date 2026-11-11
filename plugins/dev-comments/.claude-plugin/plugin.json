@@ -1,0 +1,5 @@
+{
+ "name": "dev-comments",
+ "version": "1.20261111.1521",
+ "description": "Click on your running website, pin a comment to an element, and Claude reads it, fixes it, replies and resolves. /comments opens the Comment Desk."
+}
