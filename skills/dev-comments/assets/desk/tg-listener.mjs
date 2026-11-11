@@ -5,7 +5,7 @@
 // project, whether or not a Claude session is open. Those approvals are what `desk.mjs wait` acts on, possibly hours
 // later.
 //
-// What the owner can send (only from his own chat, watch.telegram.chatId). ONLY A REPLY approves anything; a plain
+// What the owner can send (only from their own chat, watch.telegram.chatId). ONLY A REPLY approves anything; a plain
 // message never does:
 //   - a reply "ok" (yes / go / 👍) to a question the bot asked → that one message is approved
 //   - "pending" → the bot lists every open question of every project, numbered; a reply "ok" to that list approves

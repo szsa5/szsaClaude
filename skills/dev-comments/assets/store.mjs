@@ -3,6 +3,7 @@
 // sees half a file.
 import fs from 'node:fs';
 import path from 'node:path';
+import { imageNames } from './images.mjs';
 
 export const DIR = '.dev-comments';
 
@@ -32,21 +33,24 @@ const sitePath = (v) => (typeof v === 'string' && v[0] === '/' && v[1] !== '/' &
 const num = (v) => (typeof v === 'number' && isFinite(v) ? v : undefined);
 const FIELD_TYPES = { page: sitePath, url: sitePath, fx: num, fy: num, docX: num, docY: num, selector: (v) => (typeof v === 'string' ? v.slice(0, 2000) : undefined), viewport: (v) => (v && typeof v === 'object' ? { w: num(v.w), h: num(v.h), dpr: num(v.dpr), scrollY: num(v.scrollY) } : undefined) };
 
-export function createComment(db, body, author = 'you') {
+// `extra.images`: the names of pictures the server has already checked and saved (images.mjs); never taken from the body
+export function createComment(db, body, author = 'you', extra = {}) {
   const c = { id: db.next++, status: 'open', author, createdAt: new Date().toISOString() };
   for (const k of CREATE_FIELDS) { const v = FIELD_TYPES[k] ? FIELD_TYPES[k](body[k]) : body[k]; if (v !== undefined) c[k] = v; }
   c.text = String(c.text || '').slice(0, 4000);
+  const pics = imageNames(extra.images); if (pics.length) c.images = pics;
   c.replies = [];
   db.comments.push(c);
   return c;
 }
 
-/** status: 'open' | 'resolved'; reply: { by, text } appended; text: edit the note */
-export function patchComment(db, id, body) {
+/** status: 'open' | 'resolved'; reply: { by, text } appended (with extra.images, saved by the server); text: edit the note */
+export function patchComment(db, id, body, extra = {}) {
   const c = db.comments.find((x) => x.id === Number(id));
   if (!c) return null;
   if (body.text != null) c.text = String(body.text).slice(0, 4000);
-  if (body.reply && String(body.reply.text || '').trim()) c.replies.push({ by: String(body.reply.by || 'you'), text: String(body.reply.text).slice(0, 4000), at: new Date().toISOString() });
+  const pics = imageNames(extra.images);
+  if (body.reply && (String(body.reply.text || '').trim() || pics.length)) c.replies.push(Object.assign({ by: String(body.reply.by || 'you'), text: String(body.reply.text || '').slice(0, 4000), at: new Date().toISOString() }, pics.length ? { images: pics } : {}));
   if (body.status === 'open' || body.status === 'resolved') { c.status = body.status; c[body.status === 'resolved' ? 'resolvedAt' : 'reopenedAt'] = new Date().toISOString(); }
   c.updatedAt = new Date().toISOString();
   return c;

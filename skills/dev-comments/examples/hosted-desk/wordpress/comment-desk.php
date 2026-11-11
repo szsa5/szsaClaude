@@ -28,9 +28,13 @@
  *   POST login                      { code } → cookie
  *   GET  api/state                  what the page needs (sources, the client's comments, notes, chat, feed)
  *   POST api/comment/staging/<id>   { action: resolve|reopen|reply, text } on the client's comment (signed "me")
+ *   POST api/ready/<src>/<id>       { ready: true|false } the card's "Ready to push" tick (status only)
+ *   POST api/draft/<src>/<id>       { text } a reply that reached "Send to …", kept with the card ("Ready to send reply")
+ *                                   until it is sent or edited; '' clears it
  *   POST api/chat/<src>/<id>        { text, images: [data URL], by? } a workbench message (by: token only)
  *   GET  api/desk                   notes, chat, feed (Claude's tools)
- *   POST api/desk/note|feed|seen|shot    Claude's tools: a card's note, a feed line, "Claude is on it", a screenshot
+ *   POST api/desk/note|feed|seen|shot|draft    Claude's tools: a card's note, a feed line, "Claude is on it", a
+ *                                   screenshot, the saved reply (the Mac desk's own page saves it through this)
  *   GET  upload/<file>, shot/staging/<id>[/before]
  */
 
@@ -206,6 +210,22 @@ function dc_desk_add_message( &$s, $src, $id, $by, $text, $images, $held = false
 	$s['chat'][ $k ][] = $m;
 	return $m;
 }
+/**
+ * A reply that reached "Send to …" on the desk, kept with the card ("Ready to send reply") until it is
+ * sent or edited; '' clears it. Its own time: the note's `at` (which decides whether Claude's lane still counts) stays.
+ */
+function dc_desk_set_draft( &$s, $src, $id, $text ) {
+	$src  = preg_replace( '/[^\w-]/', '', (string) $src );
+	$id   = (string) (int) $id;
+	$text = trim( (string) $text );
+	if ( '' === $text ) {
+		unset( $s['notes'][ $src ][ $id ]['draft'] );
+	} else {
+		$s['notes'][ $src ][ $id ]['draft'] = array( 'text' => mb_substr( $text, 0, 8000 ), 'at' => dc_desk_now() );
+	}
+	return array( 'ok' => true );
+}
+
 /** pasted images arrive as data: URLs; they are stored as files next to the state */
 function dc_desk_save_images( $list, $dir = 'uploads' ) {
 	$out = array();
@@ -306,7 +326,28 @@ function dc_desk_handle() {
 			dc_desk_json( array( 'error' => 'Unknown action, or an empty reply.' ), 400 );
 		}
 		$c = dc_update( function ( &$db ) use ( $m, $ch ) { return dc_patch( $db, $m[1], $ch ); } );
+		if ( $c && isset( $ch['reply'] ) ) {   // sent: no longer "Ready to send reply"
+			dc_desk_state_update( function ( &$s ) use ( $m ) { return dc_desk_set_draft( $s, 'staging', $m[1], '' ); } );
+		}
 		$c ? dc_desk_json( $c ) : dc_desk_json( array( 'error' => 'No such comment.' ), 404 );
+	}
+
+	// the page saving (or clearing, text '') a reply that reached "Send to …": the card shows as "Ready to send reply"
+	if ( preg_match( '#^api/draft/([\w-]+)/(\d+)$#', $p, $m ) && 'POST' === $method ) {
+		$b = dc_desk_body();
+		dc_desk_json( dc_desk_state_update( function ( &$s ) use ( $m, $b ) { return dc_desk_set_draft( $s, $m[1], $m[2], $b['text'] ?? '' ); } ) );
+	}
+
+	// the owner's "Ready to push" tick on a card: only its status (lane), never a message for Claude
+	if ( preg_match( '#^api/ready/([\w-]+)/(\d+)$#', $p, $m ) && 'POST' === $method ) {
+		$b    = dc_desk_body();
+		$lane = ! empty( $b['ready'] ) ? 'ready' : 'dev';
+		dc_desk_json( dc_desk_state_update( function ( &$s ) use ( $m, $lane ) {
+			$src = preg_replace( '/[^\w-]/', '', $m[1] );
+			$id  = (string) (int) $m[2];
+			$s['notes'][ $src ][ $id ] = array_merge( $s['notes'][ $src ][ $id ] ?? array(), array( 'lane' => $lane, 'at' => dc_desk_now() ) );
+			return $s['notes'][ $src ][ $id ];
+		} ) );
 	}
 
 	if ( preg_match( '#^api/chat/([\w-]+)/(\d+)$#', $p, $m ) && 'POST' === $method ) {
@@ -347,6 +388,9 @@ function dc_desk_handle() {
 				}
 				return $s['notes'][ $src ][ $id ];
 			} ) );
+		}
+		if ( 'api/desk/draft' === $p && 'POST' === $method ) {
+			dc_desk_json( dc_desk_state_update( function ( &$s ) use ( $b ) { return dc_desk_set_draft( $s, $b['src'] ?? '', $b['id'] ?? 0, $b['text'] ?? '' ); } ) );
 		}
 		if ( 'api/desk/feed' === $p && 'POST' === $method ) {
 			dc_desk_json( dc_desk_state_update( function ( &$s ) use ( $b ) {

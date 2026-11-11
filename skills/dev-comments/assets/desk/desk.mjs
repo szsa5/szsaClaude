@@ -7,7 +7,7 @@
 //   node desk.mjs wait                      block until the owner writes in a workbench; print it and exit
 //                                           (Claude runs it in the background: the exit wakes the session)
 //   node desk.mjs pending                   the owner's messages Claude has not answered
-//   node desk.mjs say <src> <id> "text" [--img file]… [--lane dev|staging|waiting|new]   answer in a card's workbench
+//   node desk.mjs say <src> <id> "text" [--img file]… [--lane dev|ready|staging|waiting|live|new]   answer in a card's workbench
 //   node desk.mjs note <src> <id> <lane> "text"   the card's "where it stands" line + lane
 //   node desk.mjs clear <src> <id>          drop the note
 //   node desk.mjs feed "text"               a line in the Claude column
@@ -39,7 +39,7 @@
 //
 // TRUST (a hosted desk means a door from the internet into this session): Claude acts on a workbench message only
 // when THIS Mac says so: it was typed on this Mac's desk, or the owner approved it on Telegram (a reply "ok" to the
-// question `wait` sent, or "ok" / "ok 1 3" to a "pending" list; only replies count; his own chat, within 7 days,
+// question `wait` sent, or "ok" / "ok 1 3" to a "pending" list; only replies count; their own chat, within 7 days,
 // the exact text). The
 // approvals are recorded by tg-listener.mjs (one listener for every project, always running). That list lives on the Mac
 // (<state>/trusted.json); whatever the server's store says never counts, so a message written into it by the hosted
@@ -54,7 +54,9 @@ import crypto from 'node:crypto';
 import { store as fileStore, patchComment } from '../store.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const LANES = ['new', 'claude', 'dev', 'staging', 'waiting'];
+// ready: the owner ticked "Ready to push" on the card · live: the change is on production. ("Ready to send reply" is no lane:
+// the desk shows it while a confirmed reply is saved with the card.)
+const LANES = ['new', 'claude', 'dev', 'ready', 'staging', 'waiting', 'live'];
 
 // ---------- config
 function findRoot(dir = process.cwd()) {
@@ -121,6 +123,28 @@ const trusted = () => { try { return new Set(JSON.parse(fs.readFileSync(TRUST, '
 const trust = (m) => { const t = trusted(); t.add(msgHash(m)); fs.mkdirSync(STATE_DIR, { recursive: true }); fs.writeFileSync(TRUST, JSON.stringify([...t].slice(-2000))); };
 const toDataUrl = (f) => `data:image/${({ jpg: 'jpeg', jpeg: 'jpeg', webp: 'webp', gif: 'gif' })[path.extname(f).slice(1).toLowerCase()] || 'png'};base64,${fs.readFileSync(f).toString('base64')}`;
 
+// Replies saved on this Mac while the hosted desk can't keep them (a comment-desk.php from before drafts answers 404):
+// merged into the state, so the Mac desk shows "Ready to send reply" all the same; the phone desk gets them once updated
+const DRAFTS = path.join(STATE_DIR, 'drafts.json');
+const localDrafts = () => { try { return JSON.parse(fs.readFileSync(DRAFTS, 'utf8')); } catch { return {}; } };
+function localDraft(src, id, text) {
+  const d = localDrafts(), k = `${src}:${id}`;
+  if (text) d[k] = { text: String(text).slice(0, 8000), at: new Date().toISOString() };
+  else if (k in d) delete d[k];
+  else return;
+  fs.mkdirSync(STATE_DIR, { recursive: true }); fs.writeFileSync(DRAFTS, JSON.stringify(d, null, 2) + '\n');
+}
+function withLocalDrafts(st) {
+  for (const [k, draft] of Object.entries(localDrafts())) {
+    const [src, id] = k.split(':');
+    st.notes ||= {};
+    if (!st.notes[src] || Array.isArray(st.notes[src])) st.notes[src] = Object.assign({}, st.notes[src]);   // PHP sends an empty map as []
+    const n = st.notes[src][id] || {};
+    if (!n.draft || String(n.draft.at) < draft.at) st.notes[src][id] = { ...n, draft };
+  }
+  return st;
+}
+
 // ---------- where the desk state lives: this Mac (the state file) or the hosted desk's shared store (remote)
 const REMOTE = CFG.remote && CFG.remote.url ? { ...CFG.remote, url: CFG.remote.url.replace(/\/$/, '') } : null;
 function deskToken() {
@@ -135,10 +159,15 @@ async function deskCall(p, body) {
   return r;
 }
 const store = REMOTE ? {
-  get: async () => (await deskCall('/api/desk')).json(),
+  get: async () => withLocalDrafts(await (await deskCall('/api/desk')).json()),
   chat: async (src, id, by, text, dataUrls) => (await deskCall(`/api/chat/${src}/${id}`, { by, text, images: dataUrls || [] })).json(),
   note: async (src, id, lane, text) => (await deskCall('/api/desk/note', { src, id, lane, text, answer: true })).json(),
+  lane: async (src, id, lane) => (await deskCall('/api/desk/note', { src, id, lane })).json(),   // the status alone: answers nothing
   clear: async (src, id) => (await deskCall('/api/desk/note', { src, id, clear: true })).json(),
+  draft: async (src, id, text) => {
+    try { const r = await (await deskCall('/api/desk/draft', { src, id, text: text || '' })).json(); localDraft(src, id, ''); return r; }
+    catch (e) { if (!/\b404\b/.test(e.message)) throw e; localDraft(src, id, text); return { ok: true, local: true }; }   // hosted desk not updated yet: kept on this Mac
+  },
   feed: async (lines) => (await deskCall('/api/desk/feed', { lines })).json(),
   seen: async (ids) => (await deskCall('/api/desk/seen', { ids })).json(),
   image: async (name) => {   // pasted images live on the server; keep a local copy so Claude can look at them
@@ -150,7 +179,11 @@ const store = REMOTE ? {
   get: async () => read(),
   chat: async (src, id, by, text, dataUrls) => { const images = saveImages(dataUrls); return update((s) => { const m = addMessage(s, src, id, by, text, images); if (by !== 'Claude') setNote(s, src, id, { lane: 'claude', at: m.at }); return m; }); },
   note: async (src, id, lane, text) => update((s) => { setNote(s, src, id, { lane, ...(text ? { text } : {}), at: new Date().toISOString() }); answerAll(s, src, id); }),
+  lane: async (src, id, lane) => update((s) => { setNote(s, src, id, { lane, at: new Date().toISOString() }); }),
   clear: async (src, id) => update((s) => { delete (s.notes[src] || {})[id]; }),
+  // a reply that reached "Send to …", kept with the card ("Ready to send reply") until sent or edited; '' clears it. Its own
+  // time: the note's `at` (which decides whether Claude's lane still counts) is left alone
+  draft: async (src, id, text) => update((s) => { const notes = (s.notes[src] ||= {}); const n = Object.assign({}, notes[id]); if (text) n.draft = { text: String(text).slice(0, 8000), at: new Date().toISOString() }; else delete n.draft; notes[id] = n; }),
   feed: async (lines) => update((s) => { for (const t of lines) s.feed.push({ at: new Date().toISOString(), text: t }); s.feed = s.feed.slice(-200); }),
   seen: async (ids) => update((s) => { for (const { m } of unanswered(s)) if (ids.includes(m.id)) m.status = 'seen'; }),
   image: async (name) => path.join(UPLOADS, name),
@@ -253,7 +286,7 @@ async function handle(req, res) {
     const out = { me: ME, project: CFG.name || path.basename(ROOT), sources: SOURCES.map(({ id, label, audience, site, room }) => ({ id, label, audience: audience || null, site: site || '', room: room || '' })), comments: {}, errors: [], notes: st.notes, chat: st.chat, feed: st.feed.slice(-40).reverse() };
     for (const s of SOURCES) {
       try { out.comments[s.id] = await comments(s, url.searchParams.has('fresh')); } catch (e) { out.comments[s.id] = []; out.errors.push(`${s.label}: ${e.message}`); }
-      for (const c of out.comments[s.id]) c.shots = { now: fs.existsSync(path.join(s.shots, `${c.id}.png`)), before: fs.existsSync(path.join(s.shots, 'before', `${c.id}.png`)) };
+      for (const c of out.comments[s.id]) c.shots = { now: fs.existsSync(path.join(s.shots, `${c.id}.png`)), before: fs.existsSync(path.join(s.shots, 'before', `${c.id}.png`)), after: fs.existsSync(path.join(s.shots, 'after', `${c.id}.png`)) };
     }
     return send(res, 200, out);
   }
@@ -264,8 +297,20 @@ async function handle(req, res) {
     const b = await body(req); const text = String(b.text || '').trim();
     const ch = b.action === 'resolve' ? { status: 'resolved' } : b.action === 'reopen' ? { status: 'open' } : b.action === 'reply' && text ? { reply: { by: ME, text } } : null;
     if (!ch) return send(res, 400, { error: 'Unknown action, or an empty reply.' });
-    try { const c = await change(src, m[2], ch); return c ? send(res, 200, c) : send(res, 404, { error: 'No such comment.' }); }
-    catch (e) { return send(res, 502, { error: e.message }); }
+    try {
+      const c = await change(src, m[2], ch);
+      if (c && ch.reply) await store.draft(m[1], m[2], '').catch(() => {});   // sent: no longer "Ready to send reply"
+      return c ? send(res, 200, c) : send(res, 404, { error: 'No such comment.' });
+    } catch (e) { return send(res, 502, { error: e.message }); }
+  }
+
+  // a reply that reached "Send to …" is kept with the card, which shows as "Ready to send reply"; text '' clears it
+  m = /^\/api\/draft\/([\w-]+)\/(\d+)$/.exec(p);
+  if (m && req.method === 'POST') {
+    if (!source(m[1])) return send(res, 404, { error: 'No such source.' });
+    const text = String((await body(req)).text || '').trim().slice(0, 8000);
+    try { await store.draft(m[1], m[2], text); return send(res, 200, { ok: true }); }
+    catch (e) { return send(res, 502, { error: /\b404\b/.test(e.message) ? 'Not saved: the hosted desk needs its update first (comment-desk.php on staging).' : e.message }); }
   }
 
   m = /^\/api\/chat\/([\w-]+)\/(\d+)$/.exec(p);
@@ -277,15 +322,23 @@ async function handle(req, res) {
     try { const msg = await store.chat(m[1], m[2], ME, text, shots); trust(msg); return send(res, 200, msg); } catch (e) { return send(res, 502, { error: e.message }); }
   }
 
+  // the owner's "Ready to push" tick: ready, or back to "On dev" when they untick it
+  m = /^\/api\/ready\/([\w-]+)\/(\d+)$/.exec(p);
+  if (m && req.method === 'POST') {
+    if (!source(m[1])) return send(res, 404, { error: 'No such source.' });
+    const lane = (await body(req)).ready ? 'ready' : 'dev';
+    try { await store.lane(m[1], m[2], lane); return send(res, 200, { ok: true, lane }); } catch (e) { return send(res, 502, { error: e.message }); }
+  }
+
   m = /^\/upload\/([\w.-]+)$/.exec(p);
   if (m && req.method === 'GET') { try { return file(res, await store.image(m[1])); } catch { res.statusCode = 404; return res.end(); } }
-  m = /^\/shot\/([\w-]+)\/(\d+)(\/before)?$/.exec(p);
-  if (m && req.method === 'GET') { const src = source(m[1]); if (!src) { res.statusCode = 404; return res.end(); } return file(res, path.join(src.shots, m[3] ? 'before' : '', `${m[2]}.png`)); }
+  m = /^\/shot\/([\w-]+)\/(\d+)(?:\/(before|after))?$/.exec(p);
+  if (m && req.method === 'GET') { const src = source(m[1]); if (!src) { res.statusCode = 404; return res.end(); } return file(res, path.join(src.shots, m[3] || '', `${m[2]}.png`)); }
 
   res.statusCode = 404; res.end('Not found');
 }
 
-// ---------- Telegram: asking the owner about a message from the hosted desk, and reading his answer
+// ---------- Telegram: asking the owner about a message from the hosted desk, and reading their answer
 const tgToken = () => { try { return execFileSync('security', ['find-generic-password', '-s', 'dev-comments-telegram', '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; } };
 const tgChat = () => String(CFG.watch?.telegram?.chatId || '');
 async function tg(method, body) {
@@ -336,7 +389,7 @@ switch (cmd) {
         const open = unanswered(await store.get()).filter(({ m }) => m.status === 'new' || m.status === 'held');
         if (REMOTE) {   // only what this Mac trusts; everything else becomes a question on Telegram
           const outside = open.filter(({ m }) => !trusted().has(msgHash(m)));
-          for (const c of outside) await ask(c);   // the owner approves on Telegram whenever he likes (tg-listener.mjs records it)
+          for (const c of outside) await ask(c);   // the owner approves on Telegram whenever they like (tg-listener.mjs records it)
           got = open.filter(({ m }) => trusted().has(msgHash(m)));
         } else got = open;   // no hosted desk: every message was typed on this Mac
         if (got.length) await store.seen(got.map(({ m }) => m.id));

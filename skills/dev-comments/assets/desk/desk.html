@@ -11,7 +11,7 @@
     color-scheme: dark;
     --bg: #111010; --panel: #191817; --panel2: #211f1e; --hover: #242220; --ink: #efeae3; --muted: #9d958b; --line: #2e2b28;
     --acc: #f98829; --acc-soft: rgba(249, 136, 41, .14);
-    --new: #f98829; --claude: #7eaaff; --dev: #b596ff; --stg: #6fc28b; --wait: #e2b54c; --done: #7d766d;
+    --new: #ff6b6b; --claude: #7eaaff; --dev: #b596ff; --ready: #3fd7c3; --stg: #6fc28b; --reply: #f98829; --wait: #e2b54c; --live: #8fa3bd; --done: #7d766d;
     --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
   }
   * { box-sizing: border-box; }
@@ -54,8 +54,13 @@
   .item .m .when { flex: none; font-variant-numeric: tabular-nums; }
   .item .m .route { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11px; }
   .lane { flex: none; font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 7px; border-radius: 4px; background: color-mix(in srgb, var(--c) 16%, transparent); color: var(--c); }
-  .lane[data-lane="new"] { --c: var(--new); } .lane[data-lane="claude"] { --c: var(--claude); } .lane[data-lane="dev"] { --c: var(--dev); }
-  .lane[data-lane="staging"] { --c: var(--stg); } .lane[data-lane="waiting"] { --c: var(--wait); } .lane[data-lane="resolved"] { --c: var(--done); }
+  .lane[data-lane="new"] { --c: var(--new); } .lane[data-lane="claude"] { --c: var(--claude); } .lane[data-lane="dev"] { --c: var(--dev); } .lane[data-lane="ready"] { --c: var(--ready); }
+  /* "Ready to push" (the owner ticks it): the change may go out with the next push; where to, they say in the chat */
+  .readybox { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border: 1px solid color-mix(in srgb, var(--ready) 45%, transparent); border-radius: 6px; font-size: 12px; font-weight: 600; color: var(--ready); cursor: pointer; user-select: none; white-space: nowrap; }
+  .readybox input { accent-color: var(--ready); margin: 0; cursor: pointer; }
+  .readybox:has(input:checked) { background: color-mix(in srgb, var(--ready) 16%, transparent); }
+  .lane.also { padding: 2px 5px; font-size: 9px; }   /* "+ push": a ticked card whose status shows something else */
+  .lane[data-lane="staging"] { --c: var(--stg); } .lane[data-lane="reply"] { --c: var(--reply); } .lane[data-lane="waiting"] { --c: var(--wait); } .lane[data-lane="live"] { --c: var(--live); } .lane[data-lane="resolved"] { --c: var(--done); }
   .empty { padding: 28px 18px; color: var(--muted); }
 
   /* thread */
@@ -162,7 +167,22 @@
   .cmsg p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
   .cmsg.me { align-self: flex-end; background: #262a33; border-radius: 12px 12px 4px 12px; }
   .cmsg.me .by b { color: var(--ink); }
+  .shots.ba { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .shots.ba > a, .shots.ba > .noshot { display: flex; flex-direction: column; gap: 4px; min-width: 0; width: auto; max-width: none; }
+  .shots.ba img { width: 100%; max-width: none; height: auto; max-height: 420px; object-fit: contain; object-position: top; border-radius: 6px; background: #0d1119; }
+  .noshot span { display: flex; align-items: center; justify-content: center; min-height: 120px; border: 1px dashed #33405a; border-radius: 6px; color: var(--muted); font-size: 12px; }
   .cmsg.claude { align-self: flex-start; background: #1b2436; border: 1px solid #263a5c; border-radius: 12px 12px 12px 4px; }
+  /* options to pick from: rendered as pictures, decided inside the workbench */
+  .cmsg.has-opts { max-width: 100%; align-self: stretch; }
+  .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin-top: 8px; }
+  .opt { margin: 0; display: flex; flex-direction: column; border: 1px solid #263a5c; border-radius: 10px; overflow: hidden; background: #141b29; }
+  .opt a { display: block; background: #0d1119; }
+  .opt img { display: block; width: 100%; max-height: 360px; object-fit: contain; }
+  .opt figcaption { padding: 8px 10px 0; font-size: 13px; }
+  .opt figcaption b { color: var(--claude); margin-right: 4px; }
+  .opt .btn { margin: 8px 10px 10px; align-self: flex-start; }
+  .opt.chosen { border-color: var(--ready); box-shadow: 0 0 0 1px var(--ready); }
+  .opt .picked { margin: 8px 10px 10px; font-size: 12px; font-weight: 700; color: var(--ready); }
   .cmsg.claude .by b { color: var(--claude); }
   .cimgs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
   .cimgs img { display: block; max-width: 200px; max-height: 140px; border-radius: 6px; border: 1px solid #263048; }
@@ -195,8 +215,7 @@
     .toast { width: calc(100vw - 28px); justify-content: space-between; }
   }
   :focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
-  /* Gallery: every picture in one workbench, full screen, ←/→ to step, Esc to close (
-     in a focused gallery like view (per workbench)"). */
+  /* Gallery: every picture in one workbench, full screen, ←/→ to step, Esc to close. */
   .gal { position: fixed; inset: 0; z-index: 100; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: rgba(8,10,14,.97); color: #e8ecf4; }
   .gal[hidden] { display: none; }
   .gal-top { display: flex; align-items: center; gap: 12px; padding: 12px 18px; font-size: 13px; color: #9aa6bd; }
@@ -238,18 +257,35 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // exact local date and time ("29 Sep 2026, 14:24"); the full time with seconds on hover
 const when = (iso) => { if (!iso) return ''; const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }); };   // the exact time, local
-const LANES = [['all', 'All open'], ['new', 'New'], ['claude', 'With Claude'], ['dev', 'On dev'], ['staging', 'On staging'], ['waiting', 'Waiting'], ['resolved', 'Resolved']];
+const LANES = [['all', 'All open'], ['new', 'New'], ['claude', 'With Claude'], ['dev', 'On dev'], ['staging', 'On staging'], ['ready', 'Ready to push'], ['reply', 'Ready to send reply'], ['waiting', 'Waiting'], ['live', 'Live on prod'], ['resolved', 'Resolved']];
+// the list puts what needs most work on top: pending (a new comment, or a message Claude has not
+// answered), then on dev and on staging, ready to push, ready to reply, waiting, live on prod; newest first within each
+const RANK = { new: 0, claude: 0, dev: 1, staging: 1, ready: 2, reply: 3, waiting: 4, live: 5, resolved: 6 };
 const LANE_NAME = Object.fromEntries(LANES);
 let ME_NAMES = [];
 const srcOf = (id) => (data ? data.sources.find((x) => x.id === id) : null) || {};
 
 let data = null, lastJson = '', src = '', filter = 'all', sel = { staging: null, local: null };
-const drafts = {}, previewing = {}, asks = {}, pasted = {};
+const drafts = {}, previewing = {}, editing = {}, asks = {}, pasted = {};
+// the reply saved with a card (it reached "Send to …"): the card shows as "Ready to send reply" until it is sent or edited
+const savedReply = (s, c) => { const n = ((data && data.notes[s]) || {})[c.id]; return (n && n.draft && n.draft.text) || ''; };
 let split = false;
 try { split = localStorage.getItem('desk.split') === '1'; } catch {}
 try { const s = JSON.parse(localStorage.getItem('desk.view') || '{}'); src = s.src || src; filter = s.filter || filter; sel = Object.assign(sel, s.sel || {}); } catch {}
 const saveView = () => { try { localStorage.setItem('desk.view', JSON.stringify({ src, filter, sel })); } catch {} };
 
+/** When the commenter last wrote: a note or a saved reply older than that no longer counts. */
+function lastOwnerAt(c, s) {
+  const msgs = [{ by: c.author, at: c.createdAt }, ...(c.replies || [])];
+  const isOwner = (by) => (srcOf(s).audience ? !ME_NAMES.includes(by) && by !== 'Claude' : by === c.author);
+  return msgs.filter((m) => isOwner(m.by)).map((m) => m.at).sort().pop() || c.createdAt;
+}
+/** The "Ready to push" tick, whatever the card shows: a ticked card with a reply waiting shows "Ready to send reply",
+ *  but it goes out with the next push all the same. */
+function pushTicked(c, s) {
+  const note = (data.notes[s] || {})[c.id];
+  return c.status !== 'resolved' && !!note && note.lane === 'ready' && (!note.at || note.at >= lastOwnerAt(c, s));
+}
 /** Where a comment stands. Claude's note sets the lane until the commenter writes again; otherwise the last word decides. */
 function laneOf(c, s) {
   if (c.status === 'resolved') return 'resolved';
@@ -257,8 +293,10 @@ function laneOf(c, s) {
   if (chat.some((m) => m.by !== 'Claude' && m.status !== 'answered')) return 'claude';
   const note = (data.notes[s] || {})[c.id];
   const msgs = [{ by: c.author, at: c.createdAt }, ...(c.replies || [])];
-  const isOwner = (by) => (srcOf(s).audience ? !ME_NAMES.includes(by) && by !== 'Claude' : by === c.author);
-  const lastOwner = msgs.filter((m) => isOwner(m.by)).map((m) => m.at).sort().pop() || c.createdAt;
+  const lastOwner = lastOwnerAt(c, s);
+  // a reply written and confirmed ("Send to …" showing) but not sent yet, until the commenter
+  // writes again; Claude's own notes leave it alone
+  if (note && note.draft && note.draft.text && (!note.draft.at || note.draft.at >= lastOwner)) return 'reply';
   if (note && note.lane && (!note.at || note.at >= lastOwner)) return note.lane;
   const last = msgs[msgs.length - 1];
   if (srcOf(s).audience && ME_NAMES.includes(last.by)) return 'waiting';
@@ -288,15 +326,16 @@ async function load(fresh) {
 function render() {
   $('#me').innerHTML = `<b>${esc(data.project)}</b> · ${esc(data.me)}`;
   $('#tabs').innerHTML = data.sources.map((x) => `<button class="tab" role="tab" data-src="${esc(x.id)}" aria-selected="${x.id === src}">${esc(x.label)}<span class="n">${openCount(x.id)}</span></button>`).join('');
-  // filters with counts
-  const lanes = list(src).map((c) => laneOf(c, src));
-  const count = (k) => (k === 'all' ? lanes.filter((l) => l !== 'resolved').length : lanes.filter((l) => l === k).length);
+  // filters with counts; "Ready to push" is the push set: every ticked card, also one showing "Ready to send reply"
+  const rows = list(src).map((c) => ({ c, lane: laneOf(c, src), push: pushTicked(c, src), last: [c.createdAt, ...(c.replies || []).map((r) => r.at)].sort().pop() }));
+  const inLane = (x, k) => x.lane === k || (k === 'ready' && x.push);
+  const count = (k) => (k === 'all' ? rows.filter((x) => x.lane !== 'resolved').length : rows.filter((x) => inLane(x, k)).length);
   $('#filters').innerHTML = LANES.filter(([k]) => k === 'all' || k === 'resolved' || count(k)).map(([k, name]) => `<button class="chip" data-f="${k}" aria-pressed="${filter === k}">${name}<span class="n">${count(k)}</span></button>`).join('');
-  // list: newest activity first
-  const shown = list(src).map((c) => ({ c, lane: laneOf(c, src), last: [c.createdAt, ...(c.replies || []).map((r) => r.at)].sort().pop() }))
-    .filter((x) => (filter === 'all' ? x.lane !== 'resolved' : x.lane === filter))
-    .sort((a, b) => (a.last < b.last ? 1 : -1));
-  $('#list').innerHTML = shown.length ? shown.map(({ c, lane, last }) => `<button class="item ${c.status}" data-id="${c.id}" aria-current="${sel[src] === c.id}"><span class="num">${c.id}</span><span class="t">${esc(c.text)}</span><span class="m"><span class="lane" data-lane="${lane}">${LANE_NAME[lane]}</span><span class="when">${when(last)}</span><span class="route">${esc(c.page || '')}</span></span></button>`).join('')
+  // list: most work first (RANK), newest activity first within a status
+  const shown = rows.filter((x) => (filter === 'all' ? x.lane !== 'resolved' : inLane(x, filter)))
+    .sort((a, b) => (RANK[a.lane] ?? 9) - (RANK[b.lane] ?? 9) || (a.last < b.last ? 1 : -1));
+  const alsoPush = (lane, push) => (push && lane !== 'ready' ? '<span class="lane also" data-lane="ready" title="Ticked Ready to push: goes out with the next push">+ push</span>' : '');
+  $('#list').innerHTML = shown.length ? shown.map(({ c, lane, push, last }) => `<button class="item ${c.status}" data-id="${c.id}" aria-current="${sel[src] === c.id}"><span class="num">${c.id}</span><span class="t">${esc(c.text)}</span><span class="m"><span class="lane" data-lane="${lane}">${LANE_NAME[lane]}</span>${alsoPush(lane, push)}<span class="when">${when(last)}</span><span class="route">${esc(c.page || '')}</span></span></button>`).join('')
     : `<div class="empty">${filter === 'all' ? 'Nothing open here.' : 'Nothing in “' + LANE_NAME[filter] + '”.'}</div>`;
   renderThread();
   $('#feed').innerHTML = data.feed.length ? data.feed.map((f) => `<div><time>${when(f.at)}</time>${esc(f.text)}</div>`).join('') : '<span class="hint">Nothing yet.</span>';
@@ -322,22 +361,43 @@ function renderThread() {
   const links = [S.site ? `<a href="${esc(onSite(S.site, at))}#dc=${c.id}" target="_blank" rel="noopener noreferrer">Open the page ↗</a>` : '',
     pub && localSite ? `<a href="${esc(onSite(localSite, at))}" target="_blank" rel="noopener noreferrer">Same page locally ↗</a>` : ''].join('');
   const msgs = [{ by: c.author, at: c.createdAt, text: c.text }, ...(c.replies || [])].map((m) => `<div class="pmsg ${ME_NAMES.includes(m.by) ? 'mine' : ''}"><div class="by"><b>${esc(m.by)}</b> · ${when(m.at)}</div><p>${esc(m.text)}</p></div>`).join('');
-  const shots = c.shots && (c.shots.before || c.shots.now) ? `<div class="shots">${c.shots.before ? `<a href="${BASE}/shot/${src}/${c.id}/before" target="_blank"><small>Before</small><img src="${BASE}/shot/${src}/${c.id}/before" alt="Screenshot before"></a>` : ''}${c.shots.now ? `<a href="${BASE}/shot/${src}/${c.id}" target="_blank"><small>Last shot</small><img src="${BASE}/shot/${src}/${c.id}" alt="Screenshot now"></a>` : ''}</div>` : '';
+  // before / after, always: before = the before shot (or the comment's own shot), after = the
+  // same spot after the change (cli.mjs shot <id> --as after); an empty after slot says there is none yet
+  const sh = c.shots || {};
+  const beforeUrl = sh.before ? `${BASE}/shot/${src}/${c.id}/before` : sh.now ? `${BASE}/shot/${src}/${c.id}` : '';
+  const shotBox = (label, url) => url ? `<a href="${url}" target="_blank"><small>${label}</small><img src="${url}" alt="${label}"></a>` : `<div class="noshot"><small>${label}</small><span>No ${label.toLowerCase()} shot yet</span></div>`;
+  const shots = `<div class="shots ba">${shotBox('Before', beforeUrl)}${shotBox('After', sh.after ? `${BASE}/shot/${src}/${c.id}/after` : '')}</div>`;
   const resolved = c.status === 'resolved';
-  const pv = previewing[key];
+  const pv = editing[key] ? '' : previewing[key] || savedReply(src, c);
   const composer = pv ? `<div class="preview"><span class="lbl">${pub ? esc(who) + ' will read this, signed ' + esc(data.me) + ':' : 'Your reply:'}</span><blockquote>${esc(pv)}</blockquote><div class="row"><button class="btn pri" data-a="send">${pub ? 'Send to ' + esc(who) : 'Add reply'}</button><button class="btn ghost" data-a="edit">Keep editing</button></div></div>`
     : `<div class="pcomposer"><textarea id="reply" placeholder="${pub ? 'Reply to ' + esc(who) + '. Signed ' + esc(data.me) + '.' : 'A note on your own comment.'}">${esc(drafts[key] || '')}</textarea><div class="row"><button class="btn" data-a="${resolved ? 'reopen' : 'resolve'}">${resolved ? 'Reopen' : 'Resolve'}</button><span class="hint">${resolved ? '' : 'Resolves without a message.'}</span><span class="sp"></span><button class="btn pri" data-a="preview" ${drafts[key] && drafts[key].trim() ? '' : 'disabled'}>${pub ? 'Reply as ' + esc(data.me) + '…' : 'Reply…'}</button></div></div>`;
   const chat = (data.chat || {})[src + ':' + c.id] || [];
   const img = (f) => `<a href="${BASE}/upload/${esc(f)}" target="_blank" rel="noreferrer"><img src="${BASE}/upload/${esc(f)}" alt="Image"></a>`;
   const lastMine = [...chat].reverse().find((m) => m.by !== 'Claude');
   const waitingOn = lastMine && lastMine.status !== 'answered' ? (lastMine.status === 'seen' ? 'Claude is on it…' : lastMine.status === 'held' ? 'Waiting for your OK on Telegram: send the code you got there.' : 'Sent. Claude picks it up in a few seconds.') : '';
-  const chatHtml = chat.length ? `<div class="chat">${chat.map((m) => `<div class="cmsg ${m.by === 'Claude' ? 'claude' : 'me'}"><div class="by"><b>${esc(m.by)}</b> · ${when(m.at)}</div>${m.text ? `<p>${esc(m.text)}</p>` : ''}${(m.images || []).length ? `<div class="cimgs">${m.images.map(img).join('')}</div>` : ''}</div>`).join('')}${waitingOn ? `<div class="working">${esc(waitingOn)}</div>` : ''}</div>` : '';
+  // options: a message from Claude with a line "[A] label" per option and one picture per option, in order, shows
+  // as picture cards with a Choose button; the owner's "Chose A: …" after it marks the chosen card
+  const optsOf = (m) => {
+    if (m.by !== 'Claude' || !m.text) return null;
+    const o = [...m.text.matchAll(/^\[([A-Z])\]\s+(.+)$/gm)].map((x) => ({ k: x[1], label: x[2].trim() }));
+    return o.length >= 2 && (m.images || []).length >= o.length ? o : null;
+  };
+  const msgHtml = (m, i) => {
+    const o = optsOf(m);
+    if (!o) return `<div class="cmsg ${m.by === 'Claude' ? 'claude' : 'me'}"><div class="by"><b>${esc(m.by)}</b> · ${when(m.at)}</div>${m.text ? `<p>${esc(m.text)}</p>` : ''}${(m.images || []).length ? `<div class="cimgs">${m.images.map(img).join('')}</div>` : ''}</div>`;
+    const later = chat.slice(i + 1).filter((x) => x.by !== 'Claude' && /^Chose [A-Z]\b/.test(x.text || '')).pop();
+    const chosen = later ? later.text[6] : '';
+    const intro = m.text.replace(/^\[[A-Z]\]\s+.+$/gm, '').trim();
+    const extra = (m.images || []).slice(o.length);
+    return `<div class="cmsg claude has-opts"><div class="by"><b>${esc(m.by)}</b> · ${when(m.at)}</div>${intro ? `<p>${esc(intro)}</p>` : ''}<div class="opts">${o.map((x, j) => `<figure class="opt ${chosen === x.k ? 'chosen' : ''}"><a href="${BASE}/upload/${esc(m.images[j])}" target="_blank" rel="noreferrer"><img src="${BASE}/upload/${esc(m.images[j])}" alt="Option ${esc(x.k)}"></a><figcaption><b>${esc(x.k)}</b>${esc(x.label)}</figcaption>${chosen === x.k ? '<span class="picked">✓ Chosen</span>' : `<button class="btn" data-a="choose" data-k="${esc(x.k)}" data-label="${esc(x.label)}">Choose ${esc(x.k)}</button>`}</figure>`).join('')}</div>${extra.length ? `<div class="cimgs">${extra.map(img).join('')}</div>` : ''}</div>`;
+  };
+  const chatHtml = chat.length ? `<div class="chat">${chat.map(msgHtml).join('')}${waitingOn ? `<div class="working">${esc(waitingOn)}</div>` : ''}</div>` : '';
   const pastedNow = pasted[key] || [];
-  const askBox = `<div class="ask"><textarea id="ask" placeholder="Tell Claude what to change, or ask a question. Paste screenshots.${pub ? ' ' + esc(who) + ' never sees this.' : ''}">${esc(asks[key] || '')}</textarea>${pastedNow.length ? `<div class="cimgs">${pastedNow.map((d, i) => `<span class="pimg"><img src="${d}" alt="Pasted image"><button type="button" data-a="unpaste" data-i="${i}" aria-label="Remove image">×</button></span>`).join('')}</div>` : ''}<div class="row"><span class="hint">⌘ Enter sends</span><span class="sp"></span><button class="btn claude" data-a="ask" ${(asks[key] || '').trim() || pastedNow.length ? '' : 'disabled'}>Send to Claude</button></div></div>`;
+  const askBox = `<div class="ask"><textarea id="ask" placeholder="Tell Claude what to change, or ask a question. Paste screenshots. Enter sends, Shift+Enter: new line.${pub ? ' ' + esc(who) + ' never sees this.' : ''}">${esc(asks[key] || '')}</textarea>${pastedNow.length ? `<div class="cimgs">${pastedNow.map((d, i) => `<span class="pimg"><img src="${d}" alt="Pasted image"><button type="button" data-a="unpaste" data-i="${i}" aria-label="Remove image">×</button></span>`).join('')}</div>` : ''}<div class="row"><span class="hint">⌘ Enter sends</span><span class="sp"></span><button class="btn claude" data-a="ask" ${(asks[key] || '').trim() || pastedNow.length ? '' : 'disabled'}>Send to Claude</button></div></div>`;
   const eye = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
   const lock = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
   const popIcon = split ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16M4 15h16"/></svg>' : '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 4v16"/></svg>';
-  el.innerHTML = `<div class="thead"><button class="btn ghost back" data-a="back">← All</button><h2>#${c.id}</h2><span class="lane" data-lane="${lane}">${LANE_NAME[lane]}</span><span class="route">${esc(c.page || '')}</span><span class="vp">${esc(vp)}${c.element ? ' · ' + esc(c.element.label || '') : ''}</span></div>
+  el.innerHTML = `<div class="thead"><button class="btn ghost back" data-a="back">← All</button><h2>#${c.id}</h2><span class="lane" data-lane="${lane}">${LANE_NAME[lane]}</span><span class="route">${esc(c.page || '')}</span><span class="vp">${esc(vp)}${c.element ? ' · ' + esc(c.element.label || '') : ''}</span>${resolved ? '' : `<label class="readybox" title="Ticked: this change can go out with the next push. Where to (staging or live), you say in the chat."><input type="checkbox" data-ready ${pushTicked(c, src) ? 'checked' : ''}> Ready to push</label>`}</div>
     <div class="links">${links}</div>
     <div class="rooms ${split ? 'split' : ''}">
       <section class="room public">
@@ -363,7 +423,9 @@ function renderThread() {
   if (ask) {
     const btn = el.querySelector('[data-a="ask"]');
     ask.addEventListener('input', () => { asks[key] = ask.value; btn.disabled = !ask.value.trim() && !(pasted[key] || []).length; });
-    ask.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendAsk(); } });
+    // Enter sends, Shift+Enter starts a new line (⌘/Ctrl+Enter sends too), as in the comment overlay; Enter while an input
+    // method is composing (Japanese, Korean) is left to it. The public reply box below keeps ⌘/Ctrl+Enter and its check
+    ask.addEventListener('keydown', (e) => { if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229 || e.shiftKey || e.altKey) return; e.preventDefault(); sendAsk(); });
     ask.addEventListener('paste', (e) => {
       const files = [...(e.clipboardData?.items || [])].filter((i) => i.kind === 'file' && i.type.startsWith('image/')).map((i) => i.getAsFile());
       if (!files.length) return;
@@ -375,9 +437,24 @@ function renderThread() {
   const ta = $('#reply');
   if (ta) {
     ta.addEventListener('input', () => { drafts[key] = ta.value; el.querySelector('[data-a="preview"]').disabled = !ta.value.trim(); });
-    ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && ta.value.trim()) { previewing[key] = ta.value.trim(); renderThread(); } });
+    ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && ta.value.trim()) { drafts[key] = ta.value; confirmReply(c, key); } });
     if (active && active.id === 'reply') { ta.focus(); ta.setSelectionRange(active.selectionStart, active.selectionEnd); }
   }
+}
+
+// "Reply as …": the reply shows as the commenter will read it, and is saved with the card, which then shows as
+// "Ready to send reply" (orange) in the list, also after a reload and on the other desk, until it is sent or edited again
+async function confirmReply(c, key) {
+  const text = (drafts[key] || '').trim(); if (!text) return;
+  previewing[key] = text; delete editing[key]; renderThread();
+  if (await saveReply(src, c.id, text)) delete previewing[key];
+}
+async function saveReply(s, id, text) {
+  const r = await fetch(`${BASE}/api/draft/${s}/${id}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok) { toast(out.error || 'Not saved. Try again.'); return false; }
+  lastJson = ''; await load(true);
+  return true;
 }
 
 async function sendAsk() {
@@ -425,14 +502,44 @@ document.addEventListener('click', async (e) => {
   switch (b.dataset.a) {
     case 'back': $('#main').classList.remove('reading'); break;
     case 'ask': sendAsk(); break;
+    case 'choose': {   // a pick goes to Claude as the owner's message, like anything typed in the workbench
+      b.disabled = true;
+      const r = await fetch(`${BASE}/api/chat/${s}/${c.id}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: `Chose ${b.dataset.k}: ${b.dataset.label}` }) });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) { toast(out.error || 'Not sent. Try again.'); b.disabled = false; break; }
+      toast(`Chose ${b.dataset.k} on #${c.id}: Claude is on it`); lastJson = ''; await load(true); break;
+    }
     case 'unpaste': (pasted[key] || []).splice(Number(b.dataset.i), 1); renderThread(); break;
     case 'pop': split = !split; try { localStorage.setItem('desk.split', split ? '1' : '0'); } catch {} renderThread(); break;
-    case 'preview': previewing[key] = (drafts[key] || '').trim(); renderThread(); break;
-    case 'edit': delete previewing[key]; renderThread(); setTimeout(() => $('#reply') && $('#reply').focus(), 0); break;
-    case 'send': b.disabled = true; if (await act(c.id, 'reply', previewing[key])) { delete previewing[key]; delete drafts[key]; toast(srcOf(s).audience ? `Sent to ${srcOf(s).audience} on #${c.id}` : `Reply added to #${c.id}`); } else b.disabled = false; break;
+    case 'preview': confirmReply(c, key); break;
+    case 'edit': {   // back to writing: the card stops being "Ready to send reply"
+      drafts[key] = previewing[key] || savedReply(s, c) || drafts[key] || '';
+      delete previewing[key]; editing[key] = true; renderThread();
+      setTimeout(() => $('#reply') && $('#reply').focus(), 0);
+      if (savedReply(s, c) && !(await saveReply(s, c.id, ''))) break;   // not cleared: stay in writing mode anyway
+      delete editing[key];
+      break;
+    }
+    case 'send': {   // sending clears the saved reply on the server, in the same step
+      const text = previewing[key] || savedReply(s, c);
+      b.disabled = true;
+      if (await act(c.id, 'reply', text)) { delete previewing[key]; delete drafts[key]; delete editing[key]; toast(srcOf(s).audience ? `Sent to ${srcOf(s).audience} on #${c.id}` : `Reply added to #${c.id}`); } else b.disabled = false;
+      break;
+    }
     case 'resolve': if (await act(c.id, 'resolve')) toast(`Resolved #${c.id}`, () => { src = s; act(c.id, 'reopen'); }); break;
     case 'reopen': if (await act(c.id, 'reopen')) toast(`Reopened #${c.id}`); break;
   }
+});
+// the "Ready to push" tick: only the card's status changes (its note and any message to Claude stay as they are)
+document.addEventListener('change', async (e) => {
+  const box = e.target.closest('input[data-ready]'); if (!box) return;
+  const c = list(src).find((x) => x.id === sel[src]); if (!c) return;
+  const on = box.checked; box.disabled = true;
+  const r = await fetch(`${BASE}/api/ready/${src}/${c.id}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ready: on }) });
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok) { toast(out.error || 'Not saved. Try again.'); box.checked = !on; box.disabled = false; return; }
+  toast(on ? `#${c.id} is ready to push` : `#${c.id} is back on dev`);
+  lastJson = ''; await load(true);
 });
 document.addEventListener('keydown', (e) => {
   if (e.target.closest('textarea')) return;

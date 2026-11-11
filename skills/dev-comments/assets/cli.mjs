@@ -3,7 +3,8 @@
 //
 //   node integrations/dev-comments/cli.mjs list [--all]          open comments (or all), with a source-file guess
 //   node integrations/dev-comments/cli.mjs show <id>             everything captured for one comment
-//   node integrations/dev-comments/cli.mjs shot <id> [--base URL] screenshot at the commenter's width, theme and settings
+//   node integrations/dev-comments/cli.mjs shot <id> [--base URL] [--as before|after]   screenshot at the commenter's width,
+//                                          theme and settings (--as: the card's before/after pair in the Comment Desk)
 //   node integrations/dev-comments/cli.mjs reply <id> "text"     answer in the thread (shows up live on the page)
 //   node integrations/dev-comments/cli.mjs resolve <id> ["text"] mark done, optionally with a closing reply
 //   node integrations/dev-comments/cli.mjs reopen <id> ["text"]
@@ -16,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { store, patchComment } from './store.mjs';
+import { imagePath } from './images.mjs';
 
 const argv = process.argv.slice(2);
 const flag = (name, def) => { const i = argv.indexOf('--' + name); if (i < 0) return def; const v = argv[i + 1]; argv.splice(i, 2); return v; };
@@ -23,6 +25,12 @@ const bool = (name) => { const i = argv.indexOf('--' + name); if (i < 0) return 
 const all = bool('all');
 const by = flag('by', 'Claude');
 const base = (flag('base', process.env.DEV_COMMENTS_BASE || 'http://localhost:4321')).replace(/\/$/, '');
+// shot --as before|after: the before/after pair the desk shows on every card (shots/before/<id>.png, shots/after/<id>.png)
+const as = flag('as', '');
+if (as && !['before', 'after'].includes(as)) { console.error('--as is before or after'); process.exit(1); }
+// aim the shot when the change is not where the comment points (content moved, a closed dropdown, another page):
+// --at <css> shoots that element, --click <css> clicks first (opens a dropdown), --path </page/> another page of the site
+const at = flag('at', ''), clickFirst = flag('click', ''), pathOverride = flag('path', '');
 const srcDir = flag('src', 'src');
 const since = Number(flag('since', '0'));
 const [cmd, idArg, ...rest] = argv;
@@ -59,19 +67,23 @@ function locate(c) {
   return hits.slice(0, 3);
 }
 
+// the pictures pasted into a note or a reply, as files on disk the agent can open (Read them; they are what was meant)
+const pics = (list) => (Array.isArray(list) ? list.map((n) => imagePath(db.folder, n)).filter(Boolean) : []);
 function print(c, detail = false) {
   const log = (line) => console.log(clean(line));
   const reps = c.replies.length ? ` · ${c.replies.length} repl${c.replies.length === 1 ? 'y' : 'ies'}` : '';
-  log(`#${c.id}  ${c.status.toUpperCase()}  ${c.url}  ${c.viewport ? c.viewport.w + '×' + c.viewport.h : ''} ${theme(c)}${reps}`);
+  const nPics = pics(c.images).length + c.replies.reduce((n, r) => n + pics(r.images).length, 0);
+  log(`#${c.id}  ${c.status.toUpperCase()}  ${c.url}  ${c.viewport ? c.viewport.w + '×' + c.viewport.h : ''} ${theme(c)}${reps}${nPics ? ` · ${nPics} picture${nPics === 1 ? '' : 's'}` : ''}`);
   log(`    on  ${c.element ? c.element.label : '?'}${c.element && c.element.text ? `  "${short(c.element.text, 60)}"` : ''}`);
   log(`    ${detail ? c.text.split('\n').join('\n    ') : short(c.text, 140)}`);
+  if (detail) pics(c.images).forEach((f) => log(`    picture   ${f}`));
   const src = locate(c); if (src.length) log(`    src ${src[0]}${detail && src.length > 1 ? '\n        ' + src.slice(1).join('\n        ') : ''}`);
   if (detail) {
     if (c.selector) log(`    selector  ${c.selector}   at ${Math.round((c.fx || 0) * 100)}%, ${Math.round((c.fy || 0) * 100)}% of the element`);
     if (c.trail && c.trail.length) log(`    inside    ${c.trail.join(' < ')}`);
     if (c.html && c.html.data && Object.keys(c.html.data).length) log(`    <html>    ${Object.entries(c.html.data).map(([k, v]) => `data-${k}=${v}`).join(' ')}`);
     if (c.storage && Object.keys(c.storage).length) log(`    storage   ${Object.entries(c.storage).map(([k, v]) => `${k}=${short(v, 40)}`).join(' · ')}`);
-    c.replies.forEach((r) => log(`    ↳ ${r.by}: ${r.text.split('\n').join('\n      ')}`));
+    c.replies.forEach((r) => { log(`    ↳ ${r.by}: ${r.text.split('\n').join('\n      ')}`); pics(r.images).forEach((f) => log(`      picture ${f}`)); });
   }
   log('');
 }
@@ -86,15 +98,18 @@ async function shot(c) {
   // replay the commenter's saved settings (theme, design panel…) before any page script runs
   await ctx.addInitScript((s) => { try { for (const [k, v] of Object.entries(s)) localStorage.setItem(k, v); } catch {} }, c.storage || {});
   const page = await ctx.newPage();
-  const target = new URL(sitePath(c.url) || sitePath(c.page) || '/', base + '/');
+  const target = new URL(sitePath(pathOverride) || sitePath(c.url) || sitePath(c.page) || '/', base + '/');
   if (target.origin !== new URL(base).origin) { console.error(`#${c.id}: its url does not point at ${base}; not opening it`); process.exit(1); }
   await page.goto(target.href, { waitUntil: 'networkidle', timeout: 45000 }).catch(() => {});
   await page.waitForTimeout(1200);
   // some hosts answer with a bot check that navigates once more after load; if that lands mid-evaluate, wait and try again
-  const mark = async (c) => page.evaluate(markFn, c);
-  let found; try { found = await mark(c); } catch (e) { if (!/context was destroyed|navigation/i.test(String(e.message))) throw e; await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {}); await page.waitForTimeout(1500); found = await mark(c); }
+  if (clickFirst) { await page.click(clickFirst, { timeout: 5000 }).catch(() => {}); await page.waitForTimeout(700); }
+  const aim = at ? { ...c, selector: at, fx: 0.5, fy: 0.08 } : c;
+  const mark = async (x) => page.evaluate(markFn, x);
+  let found; try { found = await mark(aim); } catch (e) { if (!/context was destroyed|navigation/i.test(String(e.message))) throw e; await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {}); await page.waitForTimeout(1500); found = await mark(aim); }
   async function markFn(c) {
     document.querySelector('dev-comments')?.remove();
+    document.querySelectorAll('[data-dev-tool]').forEach((e) => e.remove());   // dev-only helpers (an options switcher…) are not the page
     let el = null; try { el = document.querySelector(c.selector); } catch {}
     if (el) el.scrollIntoView({ block: 'center' }); else window.scrollTo(0, c.docY - innerHeight / 2);
     await new Promise((r) => setTimeout(r, 900));
@@ -107,7 +122,7 @@ async function shot(c) {
     document.documentElement.appendChild(mark);
     return !!el;
   }
-  const out = path.join(db.folder, 'shots', `${c.id}.png`);
+  const out = path.join(db.folder, 'shots', as, `${c.id}.png`);
   fs.mkdirSync(path.dirname(out), { recursive: true });
   await page.screenshot({ path: out });
   await browser.close();

@@ -62,13 +62,18 @@ Four parts, joined by one file on disk. None of them is tied to a framework.
 ```
 
 **1 · The store**: one JSON file, `.dev-comments/comments.json`: an array of comments, each with `id`
-(incrementing, stable, never reused), `createdAt`, `author`, `text`, `resolved`, `replies[]` (`{ author, text, at }`)
-and a `capture` object (the table above). Screenshots go beside it in `shots/`. Writing it must not trigger a page
-reload: exclude the folder from the dev server's file watcher.
+(incrementing, stable, never reused), `createdAt`, `author`, `text`, `resolved`, `replies[]`
+(`{ author, text, at, images? }`) and a `capture` object (the table above). Screenshots go beside it in `shots/`. A
+comment or a reply may carry `images`: the names of pictures the user pasted or dropped in, stored in `att/` beside
+the file (git-ignore it, like `shots/`). Writing it must not trigger a page reload: exclude the folder from the dev
+server's file watcher.
 
 **2 · The endpoint**: the smallest thing that can read and write that file over HTTP on the dev origin. `GET`
-returns every comment; `POST` appends a comment or a reply, or flips `resolved`. Three shapes, in order of
-preference:
+returns every comment; `POST` appends a comment or a reply, or flips `resolved`. A note or a reply may send
+`images: [data:URL, …]`; the server checks each one (`assets/images.mjs`: PNG, JPEG, WebP or GIF by its first bytes,
+not by its label; at most 8 MB, at most 6 a message), writes it to `att/` under a name it makes itself, and stores
+only that name. `GET <route>/att/<name>` serves it back read-only (`nosniff`, a `default-src 'none'` CSP, the name
+checked against the one pattern it was made with). Three shapes, in order of preference:
 - **a plugin/middleware of the build tool or dev server**: it can also inject the client script and set the
   watcher exclusion. Examples: a Vite plugin, an Astro integration, Webpack dev-server middleware, a Rack
   middleware in Rails development, a Django middleware enabled only when `DEBUG`.
@@ -106,11 +111,17 @@ against the running site. Any language; keep the command names below.
 ### What the CLI must do
 
 `list`, `show <id>`, `shot <id> [--base URL]`, `reply <id> "…"`, `resolve <id> "…"`, `reopen <id> "…"`,
-`wait --since <id>`. `list` prints one line per open comment (page, width, theme, element, note) plus a **source
-guess**: grep the repo for the element's classes, then its ancestors'. `shot` reproduces the capture (same
-viewport and DPR, same `data-*` on `<html>`, same localStorage), marks the element and the pin, and writes
+`wait --since <id>`. `list` prints one line per open comment (page, width, theme, element, note, how many pictures)
+plus a **source guess**: grep the repo for the element's classes, then its ancestors'. `show` prints the file path of
+every picture in the note and its replies, so the agent can open them. `shot` reproduces the capture (same viewport
+and DPR, same `data-*` on `<html>`, same localStorage), marks the element and the pin, and writes
 `.dev-comments/shots/<id>.png`. It needs a headless browser; use an installed Chrome when there is one, because a
 headless shell cannot screenshot WebGL.
+
+`shot` also takes `--as before|after` (writes `shots/before/<id>.png` or `shots/after/<id>.png`, the pair the Comment
+Desk shows on every card) and, when the change is not where the comment points, `--at <css>` (shoot that element),
+`--click <css>` (click first, e.g. to open a dropdown) and `--path </page/>` (another page of the site). Elements
+marked `data-dev-tool` (an options switcher, other dev-only helpers) are removed before the shot.
 
 ### Wiring, whatever the stack
 
@@ -149,8 +160,9 @@ in the client manifest). Next's dev indicator owns the bottom-left corner (raise
 the indicator), and a strict `script-src` blocks loading the overlay from the sidecar's origin, which is why it is
 imported rather than script-tagged.
 
-**The reference implementation in `assets/`**: `client.js` (overlay), `store.mjs` (the file), `index.mjs` (Vite
-plugin + Astro integration), `serve.mjs` (sidecar), `next.tsx` (React mount), `cli.mjs` (agent side). Copy it when
+**The reference implementation in `assets/`**: `client.js` (overlay), `store.mjs` (the file), `images.mjs` (pasted
+pictures: check, save, serve), `index.mjs` (Vite plugin + Astro integration), `serve.mjs` (sidecar), `next.tsx`
+(React mount), `cli.mjs` (agent side). Copy it when
 the stack can use it; it is the fastest way to get exactly the behaviour described here. When it cannot, build to
 this spec instead: the file format, the commands and the interface are what must match, not the language.
 
@@ -185,7 +197,11 @@ click is swallowed and a card opens at that point.
 
 **The card**: white, 320px wide (`calc(100vw - 24px)` on a phone), 12px radius, deep shadow; the element's tag and
 classes in small grey type at the top, a textarea (min-height 72px, `#fafafa`, 8px radius), and 30px pill buttons.
-⌘/Ctrl+Enter posts, Esc closes.
+**Enter posts, Shift+Enter starts a new line** (⌘/Ctrl+Enter posts too; an Enter while an input method is composing,
+for Japanese or Korean, is left to it), Esc closes. The same goes for a thread's reply box and the floating windows.
+**A picture pasted or dropped into any of these boxes** is shrunk to at most 2400 px (WebP, JPEG fallback; small
+files as they are), shown under the box as a 76×56 thumbnail with a × to take it off, and sent with the words; a
+picture alone is a valid note. In a thread every picture shows as a thumbnail that opens full size in a new tab.
 
 **Pins**: accent, 28px tall, min-width 28px, radius `14px 14px 14px 3px` (one square corner, pointing at the
 element), white number inside, anchored to the element's click point; hover or open scales them 1.15. A resolved
@@ -199,7 +215,8 @@ row shows an **"Open here"** pill at its right (always shown on touch screens): 
 open at once beside the list; each drags by its header, has reply / resolve / delete, a ↗ to go to the comment on
 its page, and keeps what you are typing through the 4 s refresh.
 
-**Keys**: Alt+C toggles picking anywhere; Esc backs out one step (picking → card → list).
+**Keys**: Alt+C toggles picking anywhere; **double-tap C** (no modifier, not while typing) opens a new comment on
+whatever is under the cursor, no click needed; Esc backs out one step (picking → card → list).
 **Polling**: every 4 s while the tab is visible.
 **Isolation**: everything lives in one `<dev-comments>` element's shadow root on `<html>`.
 
@@ -254,7 +271,11 @@ few mistakes, and any rebuild in another language would make them again. Build e
    - a note whose `viewport.w` is `<img src=x onerror=…>`;
    - a note whose text contains an ANSI escape;
    - a cross-origin `text/plain` POST to each server;
-   - a request with `Host: evil.example` to each server.
+   - a request with `Host: evil.example` to each server;
+   - pictures: a data URL that says PNG but holds markup, an SVG, seven pictures in one note, and `att/../comments.json`
+     and `att/%2e%2e%2fcomments.json` as picture names (all refused, nothing outside `att/` served). The overlay checks
+     incoming data again (`clean()` in `client.js`), so give every new field, `images` included, its own check there,
+     or it is silently dropped.
 
    Then run every feature again (pick, save, list, Open here, reply, resolve, delete, go to another page, `shot`,
    desk reply, `wait`) to show that nothing a user does has changed.
@@ -277,7 +298,8 @@ comments wait --since 7          # blocks until a newer open comment exists
 
 For each open comment:
 1. `show` it. Read the `selector` and `inside` lines first; the `src` line is only a grep of class names (a class
-   like `a.logo` is often in the header and the footer).
+   like `a.logo` is often in the header and the footer). If it lists `picture` paths, open every one before anything
+   else: a pasted screenshot is usually the clearest statement of what is meant.
 2. `shot` it and **look at the image** before changing anything. It reproduces their width, theme and saved
    settings and marks the element and the pin. If the element was not found, the note says so: the markup changed
    since, so read the note against the current page.
@@ -285,6 +307,15 @@ For each open comment:
 4. `resolve` with one line saying what changed. If the note is ambiguous or you disagree, `reply` with the question
    instead and leave it open; do not guess and resolve.
 5. Resolve only what you actually addressed. Never delete a user's comment.
+
+### Work every comment in the main session
+
+The session that runs the watcher works each comment itself, as it lands, from reading to resolving: show it, shot
+it, look, change, check it in a real browser at the commenter's width and in both themes, resolve it on the LOCAL
+store with one plain line, and tell the owner in a line or two. A big comment (a design, three variants, research)
+is still done in the main session, just in more steps; report progress as each piece lands rather than at the end.
+Handing comments to sub-agents made every comment slower in practice (briefs, hand-offs, waiting for a full pass),
+so use one only when the owner asks for it.
 
 ### Hard rule: the agent writes to the LOCAL store only
 
@@ -329,15 +360,48 @@ A local page (`assets/desk/`: `desk.mjs` + `desk.html`, Node only) where the own
 every source of a project and talks to Claude about each one. What it shows, per comment card:
 
 - **Tabs per source** (e.g. "Tobias · staging", "Mine · localhost") with open counts; filters by **lane**: New ·
-  With Claude · On dev · On staging · Waiting · Resolved. The lane follows events: Claude's note sets it until the
-  commenter writes again; an unanswered message to Claude puts the card With Claude; the owner's last word on a
-  public source means Waiting.
+  With Claude · On dev · On staging · Ready to push · Ready to send reply · Waiting · Live on prod · Resolved. The
+  lane follows events: Claude's note sets it until the commenter writes again; an unanswered message to Claude puts
+  the card With Claude; the owner's last word on a public source means Waiting. `live` (Live on prod) is Claude's
+  lane for a change already on production while the card stays open.
+- **The list puts what needs most work on top**, not the newest: pending (New, With Claude), then On dev and On
+  staging, Ready to push, Ready to send reply, Waiting, Live on prod; newest activity first within each. The filter
+  chips follow the same order.
+- **Ready to send reply** (orange): a reply that reached "Send to <audience>" is saved with the card
+  (`notes[src][id].draft = {text, at}`) and shows as this status, also after a reload and on the other desk, until it
+  is sent (the server clears it with the reply) or the owner presses "Keep editing" (which clears it). It outranks
+  Claude's lane (Claude's `note` leaves the draft alone) but not With Claude; a newer message from the commenter ends
+  it. Routes: `POST /api/draft/<src>/<id> {text}` ('' clears) on both desks; tools: `api/desk/draft`. A hosted desk
+  from before drafts answers 404: the local desk then keeps the draft in `<state>/drafts.json` and merges it in. New
+  is coral red (`--new`), so it stays distinct from the orange.
 - **Two rooms.** Top: the thread on a white card like the overlay's own; for a public source (one with an
   `audience`) labelled "<source> · <audience> sees this", with Resolve / Reopen and "Reply as <me>…", which shows
   exactly what the audience will read before "Send to <audience>". Under it, dark blue: **Workbench · only you and
   Claude**: "Where it stands" (Claude's note), the screenshots, the chat with Claude, and a box to write to Claude
-  (text + pasted screenshots, ⌘Enter). A small button moves the top card into a left column beside the workbench
-  and back (remembered).
+  (text + pasted screenshots; Enter sends, Shift+Enter starts a new line, as in the overlay). The public reply box
+  keeps ⌘/Ctrl+Enter and its confirmation, because a stray Enter there would send a half-written reply to the
+  reviewer. A small button moves the top card into a left column beside the workbench and back (remembered).
+- **"Ready to push" tick** in each card's header (owner only): ticked, the card's lane becomes `ready`; unticked, back
+  to `dev`. Only the status changes; the note and any message to Claude stay. It means "this change may go out with
+  the next push"; *where* to (staging or production) the owner says in the chat. So when they say "push", push
+  exactly the ticked cards (nothing else from dev), then `note` them `staging` (or resolve them after production). A
+  commenter writing again on a ticked card drops it back to New. Routes: `POST /api/ready/<src>/<id> {ready}` on the
+  local desk and on the hosted desk. **The push set is the tick, not the shown status**: a ticked card with a reply
+  waiting shows "Ready to send reply" with a small teal "+ push" tag, is listed and counted under the Ready to push
+  filter, and goes out with the push like the rest (in the store: every card whose note has `lane: "ready"`). Its
+  saved reply stays after the push, for the owner to send.
+- **Before / After on every card, always.** The workbench shows a Before | After pair (`shots/before/<id>.png`,
+  `shots/after/<id>.png`; Before falls back to the comment's own shot). Every change gets its pair before it is
+  reported: `cli.mjs shot <id> --as before --base <the commented site>` and `--as after --base <dev server>`. When the
+  change is not where the comment points, aim with `--at`, `--click` or `--path` (see the CLI). Look at each pair: it
+  must show the change itself. A change with nothing to see on the page (an admin screen) leaves After empty and says
+  so on the card.
+- **Options as pictures, picked in the workbench.** When a comment has more than one good solution, build each on
+  dev (e.g. behind a dev-only switch marked `data-dev-tool`), screenshot each, and post ONE message:
+  `desk.mjs say <src> <id> "Question?\n[A] what A is\n[B] what B is" --img a.png --img b.png` (one `[X] label` line
+  and one picture per option, in the same order). The desk shows picture cards with a **Choose** button; the pick
+  arrives as the owner's workbench message "Chose A: …" (the watcher wakes the session): keep that option, delete the
+  others, answer on the card. Never send localhost A/B links to compare.
 - Refreshes every 5 s without touching what is being typed; ↑/↓ moves through the list.
 
 **Set up in a project** (the first `/comments`):
@@ -358,8 +422,9 @@ every source of a project and talks to Claude about each one. What it shows, per
    terminal, a multiplexer). Reuse one that already runs.
 2. The watcher, in the background of the current session: `node …/desk.mjs wait`. It exits as soon as the owner
    sends a workbench message (printing it, with the paths of pasted images) and marks it "Claude is on it". That
-   exit wakes the session: do the work, answer with `desk.mjs say <src> <id> "…" [--img shot.png] [--lane dev]`,
-   start `wait` again. Always restart it after answering, or the next message waits.
+   exit wakes the session: do the work, answer with
+   `desk.mjs say <src> <id> "…" [--img shot.png] [--lane dev|ready|staging|waiting|live|new]`, start `wait` again.
+   Always restart it after answering, or the next message waits.
 3. Open `http://127.0.0.1:<port>/` in the browser.
 
 Keep Claude's side current: `note <src> <id> <lane> "where it stands"` whenever a card's state changes (built on

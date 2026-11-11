@@ -11,6 +11,8 @@ const isNum = (v) => typeof v === 'number' && isFinite(v);
 const txt = (v) => (typeof v === 'string' ? v : v == null ? '' : String(v));
 /** a path on this site ("/about?x=1"), or null: never javascript:, //other.host or /\other.host */
 const sitePath = (v) => (typeof v === 'string' && v[0] === '/' && v[1] !== '/' && ![...v].some((ch) => ch === '\\' || ch.charCodeAt(0) < 32) ? v : null);
+/** the pictures of a message: stored names only (images.mjs), anything else dropped */
+const names = (v) => (Array.isArray(v) ? v.filter((n) => typeof n === 'string' && /^[a-z0-9]{6,20}-[a-f0-9]{12}\.(png|jpg|webp|gif)$/.test(n)).slice(0, 6) : []);
 function clean(c) {
   if (!c || typeof c !== 'object') return null;
   const id = Number(c.id); if (!Number.isInteger(id)) return null;
@@ -24,7 +26,8 @@ function clean(c) {
     fx: isNum(c.fx) ? c.fx : 0, fy: isNum(c.fy) ? c.fy : 0, docX: isNum(c.docX) ? c.docX : 0, docY: isNum(c.docY) ? c.docY : 0,
     viewport: vp, element: el ? Object.assign({}, el, { label: txt(el.label) }) : null,
     html: html ? { data: data ? Object.assign({}, data, { theme: data.theme == null ? undefined : txt(data.theme) }) : undefined, darkOS: html.darkOS === true } : null,
-    replies: Array.isArray(c.replies) ? c.replies.filter(obj).map((r) => ({ by: txt(r.by), text: txt(r.text), at: txt(r.at) })) : [],
+    images: names(c.images),
+    replies: Array.isArray(c.replies) ? c.replies.filter(obj).map((r) => ({ by: txt(r.by), text: txt(r.text), at: txt(r.at), images: names(r.images) })) : [],
   });
 }
 
@@ -72,6 +75,13 @@ export function mount(opts = {}) {
     .msg p { margin: 0; white-space: pre-wrap; word-wrap: break-word; }
     textarea { width: 100%; min-height: 72px; resize: vertical; border: 1px solid #ddd; border-radius: 8px; padding: 8px 10px; color: #161616; background: #fafafa; outline: none; }
     textarea:focus { border-color: var(--acc); background: #fff; }
+    .pics { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .pics img { display: block; width: 76px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid #ddd; background: #f2f2f2; }
+    .pics a { display: block; cursor: zoom-in; }
+    .pics .pic { position: relative; }
+    .pics .pic button { position: absolute; top: -7px; right: -7px; width: 20px; height: 20px; padding: 0; border: 2px solid #fff; border-radius: 10px; background: #161616; color: #fff; font: 700 12px/16px ui-sans-serif, system-ui, sans-serif; }
+    .pending:empty { display: none; }
+    textarea.drop { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 6%, #fff); }
     .actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; padding: 0 12px 12px; }
     .btn { height: 30px; padding: 0 12px; border-radius: 15px; border: 1px solid #ddd; background: #fff; color: #161616; font-weight: 600; }
     .btn.primary { background: #161616; border-color: #161616; color: #fff; }
@@ -130,7 +140,7 @@ export function mount(opts = {}) {
   const refresh = async () => {
     try {
       const db = await api('GET'); const json = JSON.stringify(db.comments);
-      const a = root.activeElement, typing = a && a.tagName === 'TEXTAREA' && !!a.closest('.card.anchored');
+      const a = root.activeElement, pinned = root.querySelector('.card.anchored'), typing = (a && a.tagName === 'TEXTAREA' && !!a.closest('.card.anchored')) || !!(pinned && pinned._pics && pinned._pics.length);
       if (json === lastJson) { if (cardStale && openId != null && !typing) { cardStale = false; renderCard(); } for (const [id, f] of floats) if (f.stale && !(a && f.el.contains(a))) { f.stale = false; drawFloat(id); } return; }   // a thread update that arrived while typing is drawn once typing stops
       lastJson = json; comments = (Array.isArray(db.comments) ? db.comments : []).map(clean).filter(Boolean);
       renderPins(); renderCount(); if (listOpen) renderList(); if (openId != null) { if (typing) cardStale = true; else renderCard(); } renderFloats();
@@ -226,6 +236,45 @@ export function mount(opts = {}) {
     place(card, point(c));
     const body = card.querySelector('.body'); body.scrollTop = body.scrollHeight;
   }
+  // ---------- the pictures of a message: stored names only (images.mjs), each a thumbnail that opens the full picture
+  const PIC = /^[a-z0-9]{6,20}-[a-f0-9]{12}\.(png|jpg|webp|gif)$/;
+  const picsOf = (list) => { const ok = (Array.isArray(list) ? list : []).filter((n) => typeof n === 'string' && PIC.test(n)); return ok.length ? `<div class="pics">${ok.map((n) => { const u = esc(o.route + '/att/' + n); return `<a href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="" loading="lazy"></a>`; }).join('')}</div>` : ''; };
+  const message = (who, at, text, images, cls = '') => `<div class="msg ${cls}"><div class="who"><b>${esc(who)}</b> · ${esc(ago(at))}</div>${text ? `<p>${esc(text)}</p>` : ''}${picsOf(images)}</div>`;
+
+  // ---------- writing: Enter sends, Shift+Enter starts a new line (⌘/Ctrl+Enter sends too; Enter while
+  // an input method is composing, Japanese or Korean, is left to it). A picture pasted or dropped into the box is
+  // shrunk to at most 2400 px, shown under it (× takes it off) and sent with the words; the pictures wait on the
+  // card itself, so a floating window keeps them through its 4 s redraw
+  const MAX_PICS = 6;
+  const shrink = (file) => new Promise((resolve) => {
+    const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => {
+      const k = Math.min(1, 2400 / Math.max(im.naturalWidth, im.naturalHeight)); URL.revokeObjectURL(url);
+      if (k === 1 && file.size < 1.5e6) { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => resolve(null); r.readAsDataURL(file); return; }
+      const cv = document.createElement('canvas'); cv.width = Math.round(im.naturalWidth * k); cv.height = Math.round(im.naturalHeight * k);
+      cv.getContext('2d').drawImage(im, 0, 0, cv.width, cv.height);
+      const d = cv.toDataURL('image/webp', 0.9); resolve(d.startsWith('data:image/webp') ? d : cv.toDataURL('image/jpeg', 0.9));
+    };
+    im.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+    im.src = url;
+  });
+  function writer(card, ta, send, onChange) {
+    const pics = card._pics || (card._pics = []);
+    const box = document.createElement('div'); box.className = 'pics pending'; ta.after(box);
+    const draw = () => { box.innerHTML = pics.map((d, i) => `<span class="pic"><img src="${esc(d)}" alt=""><button type="button" data-i="${i}" aria-label="Remove this picture">×</button></span>`).join(''); onChange(); };
+    box.addEventListener('click', (e) => { const b = e.target.closest('button[data-i]'); if (b) { pics.splice(Number(b.dataset.i), 1); draw(); ta.focus(); } });
+    const add = async (files) => { for (const f of files) { if (pics.length >= MAX_PICS) break; const d = await shrink(f); if (d) pics.push(d); } draw(); };
+    const images = (list) => [...list].filter((f) => f && /^image\/(png|jpeg|webp|gif)$/.test(f.type));
+    ta.addEventListener('keydown', (e) => { if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229 || e.shiftKey || e.altKey) return; e.preventDefault(); send(); });
+    ta.addEventListener('paste', (e) => { const f = images([...((e.clipboardData && e.clipboardData.items) || [])].filter((it) => it.kind === 'file').map((it) => it.getAsFile())); if (f.length) { e.preventDefault(); add(f); } });
+    ta.addEventListener('dragover', (e) => { if ([...((e.dataTransfer && e.dataTransfer.items) || [])].some((it) => it.kind === 'file')) { e.preventDefault(); ta.classList.add('drop'); } });
+    ta.addEventListener('dragleave', () => ta.classList.remove('drop'));
+    ta.addEventListener('drop', (e) => { ta.classList.remove('drop'); const f = images((e.dataTransfer && e.dataTransfer.files) || []); if (f.length) { e.preventDefault(); add(f); } });
+    ta.addEventListener('input', onChange);
+    draw();
+    return { pics, ready: () => !!ta.value.trim() || pics.length > 0, clear: () => { pics.length = 0; ta.value = ''; draw(); } };
+  }
+
   /** a thread's header, messages, reply box and buttons, wired; used by the pinned card and the floating windows */
   function fillThread(card, c, { close, float }) {
     const vp = c.viewport ? `${c.viewport.w}×${c.viewport.h}` : '';
@@ -233,16 +282,21 @@ export function mount(opts = {}) {
     const where = float ? (c.page === location.pathname ? 'this page' : c.page) : (c.element ? c.element.label : '');
     card.innerHTML = `<header><b>#${esc(c.id)}</b><span class="tag ${esc(c.status)}">${esc(c.status)}</span><span class="el" title="${esc(c.selector)}">${esc(where)}</span>${float ? '<button class="go" type="button" title="Go to it on its page">↗</button>' : ''}<button class="x" type="button" aria-label="Close">×</button></header>
       <div class="body">
-        <div class="msg"><div class="who"><b>${esc(c.author)}</b> · ${esc(ago(c.createdAt))}</div><p>${esc(c.text)}</p></div>
-        ${c.replies.map((r) => `<div class="msg ${r.by === o.author ? '' : 'agent'}"><div class="who"><b>${esc(r.by)}</b> · ${esc(ago(r.at))}</div><p>${esc(r.text)}</p></div>`).join('')}
+        ${message(c.author, c.createdAt, c.text, c.images)}
+        ${c.replies.map((r) => message(r.by, r.at, r.text, r.images, r.by === o.author ? '' : 'agent')).join('')}
         <div class="meta">${esc(vp)} · ${esc(theme)}${point(c) && point(c).lost ? ' · element not found, pinned by position' : ''}</div>
-        <textarea placeholder="Reply…" rows="2"></textarea>
+        <textarea placeholder="Reply… (Enter sends, Shift+Enter: new line)" rows="2"></textarea>
       </div>
       <div class="actions"><button class="btn danger" data-a="del" type="button">Delete</button><button class="btn" data-a="status" type="button">${c.status === 'resolved' ? 'Reopen' : 'Resolve'}</button><button class="btn primary" data-a="reply" type="button" disabled>Reply</button></div>`;
     const ta = card.querySelector('textarea'), replyBtn = card.querySelector('[data-a="reply"]'), del = card.querySelector('[data-a="del"]');
-    ta.addEventListener('input', () => { replyBtn.disabled = !ta.value.trim(); });
-    const reply = async () => { if (!ta.value.trim()) return; await api('PATCH', '/' + c.id, { reply: { by: o.author, text: ta.value } }); ta.value = ''; lastJson = ''; await refresh(); if (!float) renderCard(); };
-    ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) reply(); });
+    let w = null, busy = false;
+    const reply = async () => {
+      if (busy || !w.ready()) return; busy = true; replyBtn.disabled = true;
+      try { await api('PATCH', '/' + c.id, { reply: Object.assign({ by: o.author, text: ta.value }, w.pics.length ? { images: [...w.pics] } : {}) }); w.clear(); lastJson = ''; await refresh(); if (!float) renderCard(); }
+      catch (e) { replyBtn.textContent = 'Retry'; card.querySelector('.meta').textContent = 'Could not send: ' + e.message; }
+      finally { busy = false; replyBtn.disabled = !w.ready(); }
+    };
+    w = writer(card, ta, reply, () => { replyBtn.disabled = !w || !w.ready(); });
     replyBtn.addEventListener('click', reply);
     card.querySelector('[data-a="status"]').addEventListener('click', async () => { await api('PATCH', '/' + c.id, { status: c.status === 'resolved' ? 'open' : 'resolved' }); lastJson = ''; await refresh(); if (!float) renderCard(); });
     del.addEventListener('click', async () => { if (del.dataset.sure) { await api('DELETE', '/' + c.id); close(); lastJson = ''; refresh(); } else { del.dataset.sure = '1'; del.textContent = 'Delete for good?'; } });
@@ -306,17 +360,18 @@ export function mount(opts = {}) {
     draft = Object.assign(capture(el, x, y), { cx: x + scrollX, cy: y + scrollY });
     const card = document.createElement('div'); card.className = 'card anchored';
     card.innerHTML = `<header><b>New comment</b><span class="el" title="${esc(draft.selector)}">${esc(draft.element.label)}</span><button class="x" type="button" aria-label="Cancel">×</button></header>
-      <div class="body"><textarea placeholder="What should change here?" rows="3"></textarea><div class="meta">${esc(draft.viewport.w)}×${esc(draft.viewport.h)} · ⌘/Ctrl + Enter to save</div></div>
+      <div class="body"><textarea placeholder="What should change here?" rows="3"></textarea><div class="meta">${esc(draft.viewport.w)}×${esc(draft.viewport.h)} · Enter to send · Shift+Enter: new line · paste or drop a picture</div></div>
       <div class="actions"><button class="btn" data-a="cancel" type="button">Cancel</button><button class="btn accent" data-a="save" type="button" disabled>Comment</button></div>`;
     layer.appendChild(card);
     const ta = card.querySelector('textarea'), save = card.querySelector('[data-a="save"]');
-    ta.addEventListener('input', () => { save.disabled = !ta.value.trim(); });
+    let w = null, busy = false;
     const submit = async () => {
-      if (!ta.value.trim()) return; save.disabled = true;
-      try { const { cx, cy, ...data } = draft; const c = await api('POST', '', Object.assign(data, { text: ta.value })); draft = null; card.remove(); lastJson = ''; await refresh(); openThread(c.id); }
+      if (busy || !w.ready()) return; busy = true; save.disabled = true;
+      try { const { cx, cy, ...data } = draft; const c = await api('POST', '', Object.assign(data, { text: ta.value }, w.pics.length ? { images: [...w.pics] } : {})); draft = null; card.remove(); lastJson = ''; await refresh(); openThread(c.id); }
       catch (e) { save.disabled = false; save.textContent = 'Retry'; card.querySelector('.meta').textContent = 'Could not save: ' + e.message; }
+      finally { busy = false; }
     };
-    ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit(); });
+    w = writer(card, ta, submit, () => { save.disabled = !w || !w.ready(); });
     save.addEventListener('click', submit);
     card.querySelector('[data-a="cancel"]').addEventListener('click', closeCard); card.querySelector('.x').addEventListener('click', closeCard);
     place(card, { x, y }); ta.focus();
@@ -343,7 +398,11 @@ export function mount(opts = {}) {
     if (c.page !== location.pathname) {
       // only ever a page of this site: the url came from whoever wrote the comment
       const to = new URL(sitePath(c.url) || c.page, location.origin);
-      if (to.origin === location.origin) location.href = to.pathname + to.search + '#dc=' + id;
+      if (to.origin !== location.origin) return;
+      // remember the thread across the page change: a page that forwards (a renamed page, a meta refresh) drops the
+      // #dc= link, and the comment would be lost (e.g. a comment on /events/ after the page moved to /sessions/)
+      try { sessionStorage.setItem('dc-open', String(id)); } catch {}
+      location.href = to.pathname + to.search + '#dc=' + id;
       return;
     }
     const p = point(c); if (p && p.el) p.el.scrollIntoView({ block: 'center', behavior: 'smooth' }); else if (p) scrollTo({ top: c.docY - innerHeight / 2, behavior: 'smooth' });
@@ -379,15 +438,37 @@ export function mount(opts = {}) {
     const el = targetAt(e); if (!el) return;
     setPicking(false); openComposer(el, e.clientX, e.clientY);
   }, true);
+  // double-tap C (no modifier, not while typing): a new comment on whatever is under the cursor, no button, no click
+  let lastX = -1, lastY = -1, lastC = 0;
+  window.addEventListener('pointermove', (e) => { lastX = e.clientX; lastY = e.clientY; }, { passive: true, capture: true });
+  const typing = (e) => { const t = e.composedPath()[0]; return !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)); };
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { if (picking) setPicking(false); else if (draft || openId != null) closeCard(); else if (listOpen) toggleList(false); }
     if (e.altKey && e.code === 'KeyC') { e.preventDefault(); setPicking(!picking); }
+    if (e.code === 'KeyC' && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.repeat && !typing(e)) {
+      const now = performance.now();
+      if (now - lastC < 450) {
+        lastC = 0; e.preventDefault();
+        const el = lastX >= 0 ? targetAt({ clientX: lastX, clientY: lastY }) : null;
+        if (el) { setPicking(false); openComposer(el, lastX, lastY); } else setPicking(true);   // no pointer yet: fall back to picking
+      } else lastC = now;
+    }
   }, true);
   fab.addEventListener('click', () => setPicking(!picking));
   countBtn.addEventListener('click', () => { setPicking(false); toggleList(); });
 
   // ---------- go
-  refresh().then(() => { const m = /#dc=(\d+)/.exec(location.hash); if (m) { history.replaceState(null, '', location.pathname + location.search); setTimeout(() => goTo(Number(m[1])), 600); } });
+  refresh().then(() => {
+    const m = /#dc=(\d+)/.exec(location.hash);
+    let id = m ? Number(m[1]) : null;
+    if (m) history.replaceState(null, '', location.pathname + location.search);
+    try { const s = sessionStorage.getItem('dc-open'); if (s) { sessionStorage.removeItem('dc-open'); if (id == null) id = Number(s); } } catch {}
+    if (id == null || !Number.isInteger(id)) return;
+    const c = comments.find((x) => x.id === id);
+    // its page forwards here (renamed): it can't be pinned on this page, so it opens in a window instead of looping
+    if (c && c.page !== location.pathname) { setTimeout(() => openFloat(id), 600); return; }
+    setTimeout(() => goTo(id), 600);
+  });
   setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 4000);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
   requestAnimationFrame(frame);

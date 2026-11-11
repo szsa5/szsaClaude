@@ -6,8 +6,10 @@ Claude Code skills and commands.
 
 Click on your running website, pin a comment to an element, and Claude picks it up: it reads the comment,
 screenshots the spot at your screen width, fixes it, replies and resolves. Works with any stack (Vite, Astro,
-Next.js, Django, Rails, Laravel, WordPress, plain static sites). Also included: the Comment Desk (a local page with
-a private workbench per comment), optional Telegram alerts, and a phone version of the desk.
+Next.js, Django, Rails, Laravel, WordPress, plain static sites). Paste or drop screenshots into a note, or double-tap
+C to comment on whatever is under the cursor. Also included: the Comment Desk (a local page with a private workbench
+per comment, before/after shots, a "Ready to push" tick, options shown as pictures to choose from), optional Telegram
+alerts, and a phone version of the desk.
 
 - `skills/dev-comments/SKILL.md`: the spec (behaviour, file format, interface, security rules, agent loop)
 - `skills/dev-comments/assets/`: reference implementation (browser JS + Node, no dependencies; `shot` uses Playwright)

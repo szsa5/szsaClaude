@@ -7,6 +7,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { store, createComment, patchComment, deleteComment, DIR } from './store.mjs';
+import { saveImages, serveImage } from './images.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const ROUTE = '/__dev-comments';
@@ -28,7 +29,8 @@ export function originOk(req) {
 const JSON_BODY = /^application\/json\b/i;
 
 const send = (res, code, data) => { res.statusCode = code; if (code === 204) return res.end(); res.setHeader('content-type', 'application/json'); res.setHeader('cache-control', 'no-store'); res.end(JSON.stringify(data)); };
-const body = (req) => new Promise((resolve) => { let s = ''; req.on('data', (d) => { s += d; if (s.length > 2e6) req.destroy(); }); req.on('end', () => { try { resolve(JSON.parse(s || '{}')); } catch { resolve({}); } }); });
+// a note with pictures in it (images.mjs: up to 6 × 8 MB, a third larger as base64) is the largest body there is
+const body = (req) => new Promise((resolve) => { let s = ''; req.on('data', (d) => { s += d; if (s.length > 7e7) req.destroy(); }); req.on('end', () => { try { resolve(JSON.parse(s || '{}')); } catch { resolve({}); } }); });
 
 /** The JSON API as a connect-style handler (Vite middleware, or the standalone serve.mjs). */
 export function handler(db, opts = {}) {
@@ -38,9 +40,22 @@ export function handler(db, opts = {}) {
       if (!hostOk(req) || !originOk(req)) return send(res, 403, { error: 'only pages on this machine may use the comments API' });
       if ((req.method === 'POST' || req.method === 'PATCH') && !JSON_BODY.test(req.headers['content-type'] || '')) return send(res, 415, { error: 'send JSON' });
       if (req.method === 'OPTIONS') return send(res, 204, {});
+      if (req.method === 'GET' && id.startsWith('att/')) return serveImage(db.folder, id.slice(4), res);   // a picture from a note
       if (req.method === 'GET') return send(res, 200, db.read());
-      if (req.method === 'POST' && !id) { const b = await body(req); if (!String(b.text || '').trim()) return send(res, 400, { error: 'text is required' }); return send(res, 201, db.update((d) => createComment(d, b, opts.author || 'you'))); }
-      if (req.method === 'PATCH' && id) { const b = await body(req); const c = db.update((d) => patchComment(d, id, b)); return c ? send(res, 200, c) : send(res, 404, { error: 'no such comment' }); }
+      if (req.method === 'POST' && !id) {
+        const b = await body(req); let images;
+        try { images = saveImages(db.folder, b.images); } catch (e) { return send(res, 400, { error: e.message }); }
+        if (!String(b.text || '').trim() && !images.length) return send(res, 400, { error: 'write something or paste a picture' });
+        return send(res, 201, db.update((d) => createComment(d, b, opts.author || 'you', { images })));
+      }
+      if (req.method === 'PATCH' && id) {
+        const b = await body(req);
+        if (!db.read().comments.some((x) => x.id === Number(id))) return send(res, 404, { error: 'no such comment' });
+        let images;
+        try { images = saveImages(db.folder, b.reply && b.reply.images); } catch (e) { return send(res, 400, { error: e.message }); }
+        const c = db.update((d) => patchComment(d, id, b, { images }));
+        return c ? send(res, 200, c) : send(res, 404, { error: 'no such comment' });
+      }
       if (req.method === 'DELETE' && id) { const ok = db.update((d) => deleteComment(d, id)); return ok ? send(res, 200, { ok }) : send(res, 404, { error: 'no such comment' }); }
       send(res, 405, { error: 'method not allowed' });
     } catch (e) { send(res, 500, { error: String((e && e.message) || e) }); }
