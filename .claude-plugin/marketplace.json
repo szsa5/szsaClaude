@@ -1,0 +1,16 @@
+{
+ "name": "szsa",
+ "owner": {
+  "name": "szsa"
+ },
+ "metadata": {
+  "description": "Claude Code skills and commands, shared"
+ },
+ "plugins": [
+  {
+   "name": "web-workflow",
+   "source": "./plugins/web-workflow",
+   "description": "/comments, dev-comments"
+  }
+ ]
+}

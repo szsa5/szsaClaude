@@ -1,31 +1,49 @@
 # szsaClaude
 
-Claude Code skills and commands.
+Claude Code skills and commands, shared from my own library. It is a plugin marketplace: install it once, then pick the
+plugins you want; updates come with `/plugin marketplace update`.
 
-## dev-comments + `/comments`
+## Install
 
-Click on your running website, pin a comment to an element, and Claude picks it up: it reads the comment,
-screenshots the spot at your screen width, fixes it, replies and resolves. Works with any stack (Vite, Astro,
-Next.js, Django, Rails, Laravel, WordPress, plain static sites). Paste or drop screenshots into a note, or double-tap
-C to comment on whatever is under the cursor. Also included: the Comment Desk (a local page with a private workbench
-per comment, before/after shots, a "Ready to push" tick, options shown as pictures to choose from), optional Telegram
-alerts, and a phone version of the desk.
+The repo is private: you need to be invited as a collaborator (accept the GitHub e-mail), and git on your machine must
+be able to reach GitHub as you (`gh auth login`, or an SSH key).
 
-- `skills/dev-comments/SKILL.md`: the spec (behaviour, file format, interface, security rules, agent loop)
-- `skills/dev-comments/assets/`: reference implementation (browser JS + Node, no dependencies; `shot` uses Playwright)
-- `skills/dev-comments/examples/hosted-desk/wordpress/`: one worked example of a staging store and the phone desk
-- `commands/comments.md`: the `/comments` slash command
+In Claude Code:
 
-### Install
-
-```sh
-git clone https://github.com/szsa5/szsaClaude.git
-mkdir -p ~/.claude/skills ~/.claude/commands
-cp -R szsaClaude/skills/dev-comments ~/.claude/skills/
-cp szsaClaude/commands/comments.md ~/.claude/commands/
+```
+/plugin marketplace add szsa5/szsaClaude
+/plugin install web-workflow@szsa
 ```
 
-Then, in any project, type `/comments` in Claude Code. The first run sets the project up.
+Then restart Claude Code (or run `/reload-plugins`). In a project, type `/comments`: the first run sets the project up.
+
+### Had the old copy-paste install?
+
+Remove the copies first, or every skill shows up twice:
+
+```
+rm -rf ~/.claude/skills/dev-comments ~/.claude/commands/comments.md
+```
+
+Projects you already set up keep working: their `integrations/dev-comments` and `.dev-comments/` stay as they are.
+
+## Updates
+
+```
+/plugin marketplace update szsa
+```
+
+then `/plugin` → Installed → update the plugin if it offers one. To have it happen by itself, turn on auto-update for
+the `szsa` marketplace in `/plugin` → Marketplaces (background updates of a private repo need a `GITHUB_TOKEN` in your
+environment).
+
+## What is in it
+
+<!-- items: written by share.py -->
+| Plugin | Install | What is in it |
+|---|---|---|
+| `web-workflow` | `/plugin install web-workflow@szsa` | `/comments`: Comments (dev-comments) - open the Comment Desk + watcher and show the menu; `dev-comments`: Use when the user wants to click on their running website and leave comments for Claude, "like Figma comments", instead of screenshotting and describing where a |
+<!-- /items -->
 
 The core (overlay, CLI, desk) runs anywhere Node runs. The Telegram alerts and the phone desk read secrets from the
 macOS Keychain and use launchd; on Linux, use the environment variables and a systemd timer the skill mentions.
